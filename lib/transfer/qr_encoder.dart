@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 
 import 'crc32.dart';
@@ -40,7 +41,20 @@ class QRFileEncoder {
     final transferId = _randomId();
     final fileSha = sha256.convert(bytes).toString();
 
+    // Compress before encrypting (compressing ciphertext is pointless since
+    // encrypted data is already high-entropy). Only keep the compressed
+    // result if it is actually smaller; tiny/incompressible files are sent
+    // as-is to avoid gzip container overhead.
     List<int> payloadBytes = bytes;
+    var actuallyCompressed = false;
+    if (compressed) {
+      final gzipped = GZipEncoder().encode(bytes);
+      if (gzipped != null && gzipped.length < bytes.length) {
+        payloadBytes = gzipped;
+        actuallyCompressed = true;
+      }
+    }
+
     String? saltB64;
     String? nonceB64;
     String? macB64;
@@ -50,7 +64,8 @@ class QRFileEncoder {
         throw ArgumentError('A passphrase is required when encryption is enabled.');
       }
       final salt = _randomBytes(16);
-      final encryptedPayload = await QrEncryption.encrypt(plainBytes: bytes, passphrase: passphrase, salt: salt);
+      final encryptedPayload =
+          await QrEncryption.encrypt(plainBytes: payloadBytes, passphrase: passphrase, salt: salt);
       payloadBytes = encryptedPayload.cipherText;
       saltB64 = base64Url.encode(salt);
       nonceB64 = base64Url.encode(encryptedPayload.nonce);
@@ -100,7 +115,7 @@ class QRFileEncoder {
       chunkSize: chunkSize,
       fecChunks: fecChunks,
       encrypted: encrypted,
-      compressed: compressed,
+      compressed: actuallyCompressed,
       saltB64: saltB64,
       nonceB64: nonceB64,
       macB64: macB64,

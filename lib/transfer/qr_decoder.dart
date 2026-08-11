@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 
 import 'crc32.dart';
@@ -194,20 +195,33 @@ class QRFileDecoder {
 
     var plainBytes = output;
     final m = manifest;
-    if (m != null && m.encrypted) {
-      if (passphrase == null || passphrase.isEmpty) {
-        throw const QrEncryptionRequiredException('A passphrase is required to decrypt this file.');
+
+    try {
+      if (m != null && m.encrypted) {
+        if (passphrase == null || passphrase.isEmpty) {
+          throw const QrEncryptionRequiredException('A passphrase is required to decrypt this file.');
+        }
+        if (m.saltB64 == null || m.nonceB64 == null || m.macB64 == null) {
+          throw const QrEncryptionRequiredException('Encryption metadata is missing; rescan the manifest QR frame.');
+        }
+        plainBytes = await QrEncryption.decrypt(
+          cipherText: output,
+          nonce: base64Url.decode(m.nonceB64!),
+          mac: base64Url.decode(m.macB64!),
+          passphrase: passphrase,
+          salt: base64Url.decode(m.saltB64!),
+        );
       }
-      if (m.saltB64 == null || m.nonceB64 == null || m.macB64 == null) {
-        throw const QrEncryptionRequiredException('Encryption metadata is missing; rescan the manifest QR frame.');
+
+      if (m != null && m.compressed) {
+        plainBytes = GZipDecoder().decodeBytes(plainBytes);
       }
-      plainBytes = await QrEncryption.decrypt(
-        cipherText: output,
-        nonce: base64Url.decode(m.nonceB64!),
-        mac: base64Url.decode(m.macB64!),
-        passphrase: passphrase,
-        salt: base64Url.decode(m.saltB64!),
-      );
+    } on QrEncryptionRequiredException {
+      rethrow;
+    } catch (_) {
+      // Corrupted or truncated payload (e.g. a bad gzip stream). Treat the
+      // same as a failed integrity check rather than crashing the receiver.
+      return null;
     }
 
     if (fileSize != null && plainBytes.length != fileSize) return null;
