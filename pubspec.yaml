@@ -1,5 +1,5 @@
 name: qrdata
-version: 0.3.0+3
+version: 0.4.0+4
 publish_to: none
 
 environment:
@@ -19,6 +19,9 @@ dependencies:
   mobile_scanner: ^5.2.3
   wakelock_plus: ^1.2.8
   url_launcher: ^6.3.0
+  permission_handler: ^11.3.1
+  vibration: ^2.0.0
+  flutter_zxing: ^3.5.1
 
 dev_dependencies:
   flutter_test:

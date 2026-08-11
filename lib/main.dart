@@ -1,10 +1,28 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
+import 'diagnostics/app_logger.dart';
 import 'screens/home_screen.dart';
 
 void main() {
-  WidgetsFlutterBinding.ensureInitialized();
-  runApp(const QRDataApp());
+  runZonedGuarded(() {
+    WidgetsFlutterBinding.ensureInitialized();
+
+    FlutterError.onError = (FlutterErrorDetails details) {
+      FlutterError.presentError(details);
+      AppLogger.log('${details.exceptionAsString()}\n${details.stack}', level: 'ERROR');
+    };
+    PlatformDispatcher.instance.onError = (Object error, StackTrace stack) {
+      AppLogger.log('$error\n$stack', level: 'ERROR');
+      return true;
+    };
+
+    runApp(const QRDataApp());
+  }, (Object error, StackTrace stack) {
+    AppLogger.log('$error\n$stack', level: 'ERROR');
+  });
 }
 
 class QRDataApp extends StatelessWidget {

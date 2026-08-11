@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'logs_screen.dart';
 import 'receive_screen.dart';
 import 'send_screen.dart';
 
@@ -17,7 +18,16 @@ class HomeScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('QRData')),
+      appBar: AppBar(
+        title: const Text('QRData'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.receipt_long),
+            tooltip: 'Diagnostics log',
+            onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const LogsScreen())),
+          ),
+        ],
+      ),
       body: Column(
         children: [
           Expanded(
