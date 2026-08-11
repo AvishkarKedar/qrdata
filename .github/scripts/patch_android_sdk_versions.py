@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
-"""Bump compileSdk/targetSdk in the generated Android project.
+"""Bump compileSdk/targetSdk for the whole generated Android project.
 
-Several plugins (flutter_plugin_android_lifecycle, package_info_plus,
-url_launcher_android, wakelock_plus, and desktop_drop's transitive
-androidx.fragment/window/lifecycle/core dependencies) require compiling
-against a recent API level. That required level has already moved once
-during this project's life (33 -> 35 -> 36), so this value is kept as a
-single constant that is easy to bump again later without touching the
-regex logic below.
+This fixes two DIFFERENT failure modes that both show up as a Gradle
+"checkReleaseAarMetadata" error, because they need two different fixes:
 
-Flutter's own default template value can lag behind that requirement, which
-fails the release build during Gradle's AAR-metadata check, e.g.:
+1. `:app:checkReleaseAarMetadata` fails because plugins ship precompiled
+   AARs (flutter_plugin_android_lifecycle, package_info_plus,
+   url_launcher_android, wakelock_plus, ...) whose metadata declares a
+   minimum compileSdk our *app* module must also use. Fixed by
+   `patch_app_module()` below, which edits android/app/build.gradle(.kts).
 
-    Dependency 'androidx.fragment:fragment:1.7.1' requires libraries and
-    applications that depend on it to compile against version 36 or later.
+2. `:desktop_drop:checkReleaseAarMetadata` (or any other *source* plugin
+   module) fails on its OWN compilation, independent of whatever the app
+   module is set to. Some plugins (desktop_drop is a known case) hardcode
+   their own, older `compileSdkVersion` directly in their own
+   android/build.gradle instead of inheriting the app's value, so bumping
+   only the app module does nothing for them. The only fix that reaches a
+   plugin's own build file (which lives in the pub cache, not this repo)
+   is to force every Gradle subproject's compileSdk from the *root*
+   android/build.gradle(.kts), applied in `afterEvaluate` so it runs after
+   -- and therefore overrides -- whatever value the plugin's own script set.
+   That is what `append_root_override()` does.
 
-This script is intentionally defensive: it tries both the Groovy
-(`build.gradle`) and Kotlin DSL (`build.gradle.kts`) forms the Flutter
-template may generate, and only warns (never fails the build) if neither
-file matches the patterns it knows about, since the exact template text can
+Both patchers are defensive: they only warn (never fail the build) if the
+files/patterns they expect are not found, since the exact template text can
 change between Flutter releases.
 """
 from __future__ import annotations
@@ -29,21 +34,56 @@ import sys
 
 TARGET_SDK = 36
 
+MARKER = "patch_android_sdk_versions.py"
 
-def patch(path: pathlib.Path) -> bool:
+KOTLIN_ROOT_OVERRIDE = f"""
+
+// --- Added by .github/scripts/{MARKER} ---
+// Some third-party plugins (e.g. desktop_drop) hardcode their own, lower
+// compileSdk in their own android/build.gradle instead of inheriting the
+// app's setting, so Gradle's AAR-metadata check can fail for that plugin's
+// own module even though our app module is configured correctly. Forcing
+// every subproject to compile against the same SDK level here -- after each
+// subproject's own build script has already run, via afterEvaluate --
+// overrides any outdated value a plugin author left behind.
+subprojects {{
+    afterEvaluate {{
+        extensions.findByName("android")?.let {{ ext ->
+            (ext as? com.android.build.gradle.BaseExtension)?.compileSdkVersion({TARGET_SDK})
+        }}
+    }}
+}}
+"""
+
+GROOVY_ROOT_OVERRIDE = f"""
+
+// --- Added by .github/scripts/{MARKER} ---
+// See the Kotlin DSL branch of this script for the full explanation: some
+// plugins hardcode their own outdated compileSdk. This forces every
+// subproject (including plugins pulled from pub cache) to compile against
+// the same SDK level, applied after each subproject's own script has run.
+subprojects {{
+    afterEvaluate {{ proj ->
+        if (proj.hasProperty('android')) {{
+            proj.android {{
+                compileSdkVersion {TARGET_SDK}
+            }}
+        }}
+    }}
+}}
+"""
+
+
+def patch_app_module(path: pathlib.Path) -> bool:
     if not path.exists():
         return False
     text = path.read_text()
     original = text
 
-    # `compileSdk flutter.compileSdkVersion` (Groovy) or
-    # `compileSdk = flutter.compileSdkVersion` (Kotlin DSL / newer Groovy).
     text = re.sub(r"compileSdk(\s*=?\s*)flutter\.compileSdkVersion", rf"compileSdk\g<1>{TARGET_SDK}", text)
     text = re.sub(
         r"compileSdkVersion(\s*=?\s*)flutter\.compileSdkVersion", rf"compileSdkVersion\g<1>{TARGET_SDK}", text
     )
-    # Already-numeric but too-low values written by older Flutter templates
-    # or by a previous run of this script targeting an older SDK level.
     text = re.sub(r"compileSdk(\s*=?\s*)\d{2}\b", rf"compileSdk\g<1>{TARGET_SDK}", text)
     text = re.sub(r"compileSdkVersion(\s*=?\s*)\d{2}\b", rf"compileSdkVersion\g<1>{TARGET_SDK}", text)
 
@@ -60,20 +100,45 @@ def patch(path: pathlib.Path) -> bool:
     return False
 
 
+def append_root_override(path: pathlib.Path, snippet: str) -> bool:
+    if not path.exists():
+        return False
+    text = path.read_text()
+    if MARKER in text:
+        print(f"{path} already has the subprojects compileSdk override; skipping")
+        return True
+    path.write_text(text + snippet)
+    print(f"Appended subprojects compileSdk={TARGET_SDK} override to {path}")
+    return True
+
+
 def main() -> None:
-    candidates = [
+    app_candidates = [
         pathlib.Path("android/app/build.gradle.kts"),
         pathlib.Path("android/app/build.gradle"),
     ]
-    patched_any = False
-    for candidate in candidates:
-        if patch(candidate):
-            patched_any = True
-    if not patched_any:
+    patched_app = False
+    for candidate in app_candidates:
+        if patch_app_module(candidate):
+            patched_app = True
+    if not patched_app:
         print(
-            "WARNING: could not find/patch a build.gradle(.kts) file for compileSdk/targetSdk. "
-            "The generated Android project template may have changed; an AAR-metadata build "
-            "failure about compileSdk may recur.",
+            "WARNING: could not find/patch android/app/build.gradle(.kts) for compileSdk/targetSdk.",
+            file=sys.stderr,
+        )
+
+    root_kts = pathlib.Path("android/build.gradle.kts")
+    root_groovy = pathlib.Path("android/build.gradle")
+    patched_root = False
+    if root_kts.exists():
+        patched_root = append_root_override(root_kts, KOTLIN_ROOT_OVERRIDE)
+    elif root_groovy.exists():
+        patched_root = append_root_override(root_groovy, GROOVY_ROOT_OVERRIDE)
+    if not patched_root:
+        print(
+            "WARNING: could not find android/build.gradle(.kts) to add the subprojects compileSdk "
+            "override; plugins with their own hardcoded compileSdk may still fail their own AAR "
+            "metadata check.",
             file=sys.stderr,
         )
 
