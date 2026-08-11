@@ -18,9 +18,20 @@ This fixes two DIFFERENT failure modes that both show up as a Gradle
    only the app module does nothing for them. The only fix that reaches a
    plugin's own build file (which lives in the pub cache, not this repo)
    is to force every Gradle subproject's compileSdk from the *root*
-   android/build.gradle(.kts), applied in `afterEvaluate` so it runs after
-   -- and therefore overrides -- whatever value the plugin's own script set.
-   That is what `append_root_override()` does.
+   android/build.gradle(.kts). That is what `append_root_override()` does.
+
+   Flutter's own generated root build file contains a line like
+   `subprojects { project.evaluationDependsOn(":app") }`, which forces the
+   ":app" subproject to fully evaluate immediately, before the rest of the
+   root script (including our appended override, which runs later in the
+   same file) finishes running. That means by the time our override's
+   `subprojects { ... }` block reaches ":app", it may already be evaluated,
+   and calling `afterEvaluate` on an already-evaluated project throws
+   "Cannot run Project.afterEvaluate(Action) when the project is already
+   evaluated." The override below checks each subproject's evaluation
+   state and applies the compileSdk override immediately when it's already
+   evaluated, or via afterEvaluate otherwise, so it is safe regardless of
+   evaluation order.
 
 Both patchers are defensive: they only warn (never fail the build) if the
 files/patterns they expect are not found, since the exact template text can
@@ -43,14 +54,21 @@ KOTLIN_ROOT_OVERRIDE = f"""
 // compileSdk in their own android/build.gradle instead of inheriting the
 // app's setting, so Gradle's AAR-metadata check can fail for that plugin's
 // own module even though our app module is configured correctly. Forcing
-// every subproject to compile against the same SDK level here -- after each
-// subproject's own build script has already run, via afterEvaluate --
-// overrides any outdated value a plugin author left behind.
+// every subproject to compile against the same SDK level here overrides any
+// outdated value a plugin author left behind. Some subprojects (notably
+// ":app", via this file's own `evaluationDependsOn(":app")` line above) may
+// already be evaluated by the time this runs, so apply immediately in that
+// case instead of scheduling afterEvaluate (which would throw).
 subprojects {{
-    afterEvaluate {{
+    val applyOverride: () -> Unit = {{
         extensions.findByName("android")?.let {{ ext ->
             (ext as? com.android.build.gradle.BaseExtension)?.compileSdkVersion({TARGET_SDK})
         }}
+    }}
+    if (state.executed) {{
+        applyOverride()
+    }} else {{
+        afterEvaluate {{ applyOverride() }}
     }}
 }}
 """
@@ -59,16 +77,22 @@ GROOVY_ROOT_OVERRIDE = f"""
 
 // --- Added by .github/scripts/{MARKER} ---
 // See the Kotlin DSL branch of this script for the full explanation: some
-// plugins hardcode their own outdated compileSdk. This forces every
-// subproject (including plugins pulled from pub cache) to compile against
-// the same SDK level, applied after each subproject's own script has run.
-subprojects {{
-    afterEvaluate {{ proj ->
+// plugins hardcode their own outdated compileSdk, and some subprojects
+// (notably ":app") may already be evaluated by the time this runs, so this
+// applies immediately in that case instead of scheduling afterEvaluate
+// (which would throw "already evaluated").
+subprojects {{ proj ->
+    def applyOverride = {{
         if (proj.hasProperty('android')) {{
             proj.android {{
                 compileSdkVersion {TARGET_SDK}
             }}
         }}
+    }}
+    if (proj.state.executed) {{
+        applyOverride()
+    }} else {{
+        proj.afterEvaluate {{ applyOverride() }}
     }}
 }}
 """
