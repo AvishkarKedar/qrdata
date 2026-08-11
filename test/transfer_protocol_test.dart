@@ -227,4 +227,50 @@ void main() {
       throwsA(isA<QrEncryptionRequiredException>()),
     );
   });
+
+  test('compressed transfer round-trips and actually shrinks compressible payloads', () async {
+    // Highly repetitive/compressible content.
+    final bytes = List<int>.generate(6000, (i) => i % 5 == 0 ? 65 : 66);
+    final encoder = QRFileEncoder(chunkSize: 400, compressed: true);
+    final transfer = await encoder.encodeFile(
+      fileName: 'compressible.txt',
+      mimeType: 'text/plain',
+      bytes: bytes,
+    );
+
+    // Compression must have actually run, not just been requested.
+    expect(transfer.manifest.compressed, isTrue);
+    expect(transfer.manifest.payloadSize, lessThan(bytes.length));
+
+    final decoder = QRFileDecoder();
+    for (final frame in transfer.frames) {
+      decoder.acceptFrame(frame);
+    }
+    expect(decoder.isComplete, isTrue);
+
+    final decoded = await decoder.buildFile();
+    expect(decoded, isNotNull);
+    expect(decoded!.bytes, bytes);
+  });
+
+  test('incompressible payloads are sent uncompressed even when compression is requested', () async {
+    // Effectively random/high-entropy bytes should not shrink under gzip, so
+    // the encoder should skip compression and just send the raw payload.
+    final bytes = List<int>.generate(500, (i) => (i * 2654435761) % 256);
+    final encoder = QRFileEncoder(chunkSize: 200, compressed: true);
+    final transfer = await encoder.encodeFile(
+      fileName: 'random.bin',
+      mimeType: 'application/octet-stream',
+      bytes: bytes,
+    );
+
+    final decoder = QRFileDecoder();
+    for (final frame in transfer.frames) {
+      decoder.acceptFrame(frame);
+    }
+    expect(decoder.isComplete, isTrue);
+    final decoded = await decoder.buildFile();
+    expect(decoded, isNotNull);
+    expect(decoded!.bytes, bytes);
+  });
 }

@@ -21,6 +21,12 @@ jobs:
   build-android:
     needs: verify
     runs-on: ubuntu-latest
+    # Defined at job level (not inside the signing step's own env:) because a
+    # step's `if:` condition is evaluated before that same step's env block
+    # is applied. Keeping it here is what actually lets the conditional below
+    # work when the keystore secrets are configured.
+    env:
+      HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -36,7 +42,6 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          HAS_ANDROID_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
           echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/app/release-keystore.jks
           cat > android/key.properties <<EOF

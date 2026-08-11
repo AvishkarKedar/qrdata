@@ -10,6 +10,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
+import '../transfer/calibration.dart';
 import '../transfer/encryption.dart';
 import '../transfer/qr_decoder.dart';
 import '../transfer/receive_session_store.dart';
@@ -140,6 +141,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     try {
       final result = await decoder.buildFile(passphrase: passphrase);
       if (result == null) {
+        await AppLogger.log(
+          'Integrity check failed for transfer ${decoder.transferId ?? 'unknown'} (${decoder.fileName ?? 'unknown file'})',
+          level: 'ERROR',
+        );
         if (mounted) setState(() => status = 'Integrity check failed. Waiting for a clean retransmission.');
         finishing = false;
         return;
@@ -217,6 +222,16 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return decodedFrames / elapsed;
   }
 
+  /// Once enough frames have been observed, recommend a sender profile based
+  /// on how fast this camera/device is actually able to decode frames. This
+  /// is a lightweight stand-in for a full calibration screen: it uses the
+  /// same `CalibrationEngine` that was previously written but never wired
+  /// into any UI.
+  CalibrationResult? get _calibration {
+    if (decodedFrames < 20 || startedAt == null) return null;
+    return CalibrationEngine.recommend(successfulFramesPerSecond: actualFps.round(), lowLight: false);
+  }
+
   Widget _buildScanner() {
     final isWindows = !kIsWeb && Platform.isWindows;
 
@@ -274,6 +289,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   Widget build(BuildContext context) {
     final missingReport = decoder.missingChunkReport;
+    final calibration = _calibration;
     return Scaffold(
       appBar: AppBar(title: const Text('Receive file')),
       body: Column(
@@ -289,6 +305,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 LinearProgressIndicator(value: decoder.progress),
                 const SizedBox(height: 8),
                 Text('${(decoder.progress * 100).toStringAsFixed(1)}% complete \u2022 Actual decoded FPS: ${actualFps.toStringAsFixed(1)}'),
+                if (calibration != null) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Camera calibration: ${calibration.note} (try ~${calibration.recommendedFps} FPS on the sender)',
+                    style: const TextStyle(fontStyle: FontStyle.italic),
+                  ),
+                ],
                 if (missingReport != null && decoder.progress > 0 && decoder.progress < 1) ...[
                   const SizedBox(height: 12),
                   const Text('Missing-chunk retransmission code (show this QR to the sender, or copy and paste it into the sender app)'),
