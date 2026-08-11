@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mime/mime.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../transfer/qr_encoder.dart';
 import '../transfer/transfer_estimator.dart';
@@ -22,6 +23,7 @@ class SendScreen extends StatefulWidget {
 
 class _SendScreenState extends State<SendScreen> {
   final fpsOptions = const [10, 15, 30, 60, 90, 120];
+  final passphraseController = TextEditingController();
   int fps = 15;
   TransferProfile profile = TransferProfile.balanced;
   List<String> frames = [];
@@ -33,11 +35,14 @@ class _SendScreenState extends State<SendScreen> {
   bool isDragging = false;
   bool compress = true;
   bool encrypt = false;
+  bool encoding = false;
   double brightness = 1.0;
 
   @override
   void dispose() {
     timer?.cancel();
+    passphraseController.dispose();
+    WakelockPlus.disable();
     super.dispose();
   }
 
@@ -50,11 +55,28 @@ class _SendScreenState extends State<SendScreen> {
   Future<void> loadDroppedFile(String path) async {
     final file = File(path);
     final bytes = await file.readAsBytes();
-    await loadPlatformFile(PlatformFile(name: path.split(Platform.pathSeparator).last, size: bytes.length, path: path, bytes: bytes));
+    await loadPlatformFile(PlatformFile(
+      name: path.split(Platform.pathSeparator).last,
+      size: bytes.length,
+      path: path,
+      bytes: bytes,
+    ));
   }
 
   Future<void> loadPlatformFile(PlatformFile file) async {
     final bytes = file.bytes ?? await File(file.path!).readAsBytes();
+
+    if (encrypt && passphraseController.text.isEmpty) {
+      setState(() {
+        selectedFile = file;
+        selectedBytes = bytes;
+        frames = [];
+        estimate = null;
+      });
+      return;
+    }
+
+    setState(() => encoding = true);
     final mimeType = lookupMimeType(file.name, headerBytes: bytes) ?? 'application/octet-stream';
     final encoder = QRFileEncoder(
       chunkSize: profile.chunkSize,
@@ -62,13 +84,20 @@ class _SendScreenState extends State<SendScreen> {
       encrypted: encrypt,
       compressed: compress && _shouldCompress(mimeType),
     );
-    final transfer = encoder.encodeFile(fileName: file.name, mimeType: mimeType, bytes: bytes);
+    final transfer = await encoder.encodeFile(
+      fileName: file.name,
+      mimeType: mimeType,
+      bytes: bytes,
+      passphrase: encrypt ? passphraseController.text : null,
+    );
 
+    if (!mounted) return;
     setState(() {
       selectedFile = file;
       selectedBytes = bytes;
       frames = transfer.frames;
       frameIndex = 0;
+      encoding = false;
       estimate = TransferEstimator.estimate(
         fileSizeBytes: bytes.length,
         frameCount: transfer.frames.length,
@@ -85,6 +114,7 @@ class _SendScreenState extends State<SendScreen> {
 
   void start() {
     if (frames.isEmpty) return;
+    WakelockPlus.enable();
     timer?.cancel();
     final intervalMs = (1000 / fps).round().clamp(8, 1000);
     timer = Timer.periodic(Duration(milliseconds: intervalMs), (_) {
@@ -95,6 +125,7 @@ class _SendScreenState extends State<SendScreen> {
   void stop() {
     timer?.cancel();
     timer = null;
+    WakelockPlus.disable();
     setState(() {});
   }
 
@@ -102,6 +133,8 @@ class _SendScreenState extends State<SendScreen> {
   Widget build(BuildContext context) {
     final currentFrame = frames.isEmpty ? null : frames[frameIndex];
     final isWindows = !kIsWeb && Platform.isWindows;
+    final needsPassphrase = encrypt && passphraseController.text.isEmpty && selectedFile != null;
+
     final content = ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -113,6 +146,7 @@ class _SendScreenState extends State<SendScreen> {
               child: Center(child: Text('Drag and drop a file here, or use Choose file')),
             ),
           ),
+        const SizedBox(height: 12),
         FilledButton.icon(onPressed: pickFile, icon: const Icon(Icons.attach_file), label: const Text('Choose file')),
         const SizedBox(height: 16),
         DropdownButtonFormField<TransferProfile>(
@@ -129,10 +163,54 @@ class _SendScreenState extends State<SendScreen> {
           },
         ),
         const SizedBox(height: 8),
-        SwitchListTile(title: const Text('Compress when useful'), value: compress, onChanged: (v) => setState(() => compress = v)),
-        SwitchListTile(title: const Text('Encrypt transfer - planned'), subtitle: const Text('UI toggle added; crypto implementation comes next'), value: encrypt, onChanged: (v) => setState(() => encrypt = v)),
-        ListTile(title: const Text('Sender brightness'), subtitle: Slider(value: brightness, min: 0.4, max: 1.0, onChanged: (v) => setState(() => brightness = v))),
-        if (selectedFile != null) ...[
+        SwitchListTile(
+          title: const Text('Compress when useful'),
+          value: compress,
+          onChanged: (v) {
+            setState(() => compress = v);
+            if (selectedFile != null) loadPlatformFile(selectedFile!);
+          },
+        ),
+        SwitchListTile(
+          title: const Text('Encrypt this transfer'),
+          subtitle: const Text('AES-256-GCM with a passphrase you share out-of-band'),
+          value: encrypt,
+          onChanged: (v) {
+            setState(() => encrypt = v);
+            if (selectedFile != null) loadPlatformFile(selectedFile!);
+          },
+        ),
+        if (encrypt)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: passphraseController,
+                    obscureText: true,
+                    decoration: const InputDecoration(labelText: 'Passphrase'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: selectedFile == null ? null : () => loadPlatformFile(selectedFile!),
+                  child: const Text('Apply'),
+                ),
+              ],
+            ),
+          ),
+        ListTile(
+          title: const Text('Sender brightness'),
+          subtitle: Slider(value: brightness, min: 0.4, max: 1.0, onChanged: (v) => setState(() => brightness = v)),
+        ),
+        if (encoding) const Center(child: Padding(padding: EdgeInsets.all(16), child: CircularProgressIndicator())),
+        if (needsPassphrase)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 8),
+            child: Text('Enter a passphrase and press Apply to generate encrypted QR frames.'),
+          ),
+        if (selectedFile != null && frames.isNotEmpty) ...[
           Text('File: ${selectedFile!.name}'),
           Text('Size: ${selectedFile!.size} bytes'),
           const SizedBox(height: 8),
@@ -146,12 +224,18 @@ class _SendScreenState extends State<SendScreen> {
               if (value == null) return;
               setState(() {
                 fps = value;
-                estimate = TransferEstimator.estimate(fileSizeBytes: selectedFile!.size, frameCount: frames.length, fps: fps, loopRedundancy: profile.loopRedundancy);
+                estimate = TransferEstimator.estimate(
+                  fileSizeBytes: selectedFile!.size,
+                  frameCount: frames.length,
+                  fps: fps,
+                  loopRedundancy: profile.loopRedundancy,
+                );
               });
             },
           ),
           const SizedBox(height: 8),
-          if (estimate != null) Text('Estimated transfer: ${estimate!.humanTime} (${frames.length} frames x ${profile.loopRedundancy} loops)'),
+          if (estimate != null)
+            Text('Estimated transfer: ${estimate!.humanTime} (${frames.length} frames x ${profile.loopRedundancy} loops)'),
           const SizedBox(height: 16),
           Center(
             child: currentFrame == null
@@ -171,7 +255,7 @@ class _SendScreenState extends State<SendScreen> {
             Expanded(child: OutlinedButton(onPressed: stop, child: const Text('Stop'))),
           ]),
           const SizedBox(height: 12),
-          const Text('Privacy warning: QR frames are visible. Anyone with a camera can capture them. Use encryption before sensitive transfers.'),
+          const Text('Privacy warning: QR frames are visible to any camera pointed at the screen. Turn on encryption before sending sensitive files.'),
         ],
       ],
     );
