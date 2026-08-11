@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import '../transfer/qr_decoder.dart';
 import '../widgets/artifact_preview.dart';
@@ -19,8 +20,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   final decoder = QRFileDecoder();
   DecodedFile? decodedFile;
   String status = 'Point camera at sender QR screen';
+  DateTime? startedAt;
+  int decodedFrames = 0;
 
   Future<void> onCode(String raw) async {
+    startedAt ??= DateTime.now();
+    decodedFrames++;
     final result = decoder.acceptFrame(raw);
     setState(() {
       status = decoder.statusText;
@@ -31,13 +36,22 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       final dir = await getApplicationDocumentsDirectory();
       final out = File('${dir.path}/${result.fileName}');
       await out.writeAsBytes(result.bytes, flush: true);
-      setState(() => status = 'Saved: ${out.path}');
+      setState(() => status = 'Verified and saved: ${out.path}');
     }
+  }
+
+  double get actualFps {
+    final start = startedAt;
+    if (start == null) return 0;
+    final elapsed = DateTime.now().difference(start).inMilliseconds / 1000;
+    if (elapsed <= 0) return 0;
+    return decodedFrames / elapsed;
   }
 
   @override
   Widget build(BuildContext context) {
     final isWindows = !kIsWeb && Platform.isWindows;
+    final missingReport = decoder.missingChunkReport;
     return Scaffold(
       appBar: AppBar(title: const Text('Receive file')),
       body: Column(
@@ -48,7 +62,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
-                        'Windows scanner bridge placeholder. Android camera scanning works now; Windows scanning needs OpenCV/ZBar native plugin in phase 2.',
+                        'Windows camera scanner bridge placeholder. Next phase: OpenCV/ZBar native decoder with focus/exposure controls.',
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -71,7 +85,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 const SizedBox(height: 8),
                 LinearProgressIndicator(value: decoder.progress),
                 const SizedBox(height: 8),
-                Text('${(decoder.progress * 100).toStringAsFixed(1)}% complete'),
+                Text('${(decoder.progress * 100).toStringAsFixed(1)}% complete • Actual decoded FPS: ${actualFps.toStringAsFixed(1)}'),
+                if (missingReport != null && decoder.progress > 0 && decoder.progress < 1) ...[
+                  const SizedBox(height: 12),
+                  const Text('Missing-chunk retransmission QR'),
+                  Center(child: QrImageView(data: missingReport.toQrPayload(), size: 160)),
+                ],
                 if (decodedFile != null) ...[
                   const SizedBox(height: 12),
                   ArtifactPreview(fileName: decodedFile!.fileName, bytes: decodedFile!.bytes),

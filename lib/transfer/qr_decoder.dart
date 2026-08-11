@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:crypto/crypto.dart';
 
 import 'crc32.dart';
+import 'manifest.dart';
 
 class DecodedFile {
   final String fileName;
@@ -12,7 +13,17 @@ class DecodedFile {
   DecodedFile({required this.fileName, required this.mimeType, required this.bytes});
 }
 
+class MissingChunkReport {
+  final String transferId;
+  final List<int> missing;
+
+  const MissingChunkReport({required this.transferId, required this.missing});
+
+  String toQrPayload() => 'QRD1R|$transferId|${missing.join(',')}';
+}
+
 class QRFileDecoder {
+  TransferManifest? manifest;
   String? transferId;
   String? fileName;
   String? mimeType;
@@ -20,13 +31,43 @@ class QRFileDecoder {
   int? total;
   int? fileSize;
   final Map<int, List<int>> chunks = {};
+  final Set<String> seenFrameHashes = {};
 
   double get progress => total == null || total == 0 ? 0 : chunks.length / total!;
   String get statusText => total == null
       ? 'Waiting for first frame'
       : 'Received ${chunks.length}/$total chunks';
 
+  List<int> get missingChunks {
+    final t = total;
+    if (t == null) return const [];
+    return [for (var i = 0; i < t; i++) if (!chunks.containsKey(i)) i];
+  }
+
+  MissingChunkReport? get missingChunkReport {
+    final id = transferId;
+    if (id == null) return null;
+    return MissingChunkReport(transferId: id, missing: missingChunks);
+  }
+
   DecodedFile? acceptFrame(String raw) {
+    final frameHash = sha256.convert(utf8.encode(raw)).toString();
+    if (seenFrameHashes.contains(frameHash)) return null;
+    seenFrameHashes.add(frameHash);
+
+    final incomingManifest = TransferManifest.tryParse(raw);
+    if (incomingManifest != null) {
+      manifest = incomingManifest;
+      transferId ??= incomingManifest.transferId;
+      total ??= incomingManifest.totalChunks;
+      fileName ??= incomingManifest.fileName;
+      mimeType ??= incomingManifest.mimeType;
+      fileSize ??= incomingManifest.fileSize;
+      fileSha256 ??= incomingManifest.sha256;
+      return null;
+    }
+
+    if (raw.startsWith('QRD1F|')) return null;
     if (!raw.startsWith('QRD1|')) return null;
     final parts = raw.split('|');
     if (parts.length != 11) return null;
