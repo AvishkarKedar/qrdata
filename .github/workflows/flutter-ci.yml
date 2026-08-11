@@ -26,6 +26,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Scaffold Android platform folder if missing
+        run: flutter create --platforms=android --org com.qrdata .
       - run: flutter pub get
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
@@ -42,6 +44,8 @@ jobs:
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+      - name: Scaffold Windows platform folder if missing
+        run: flutter create --platforms=windows --org com.qrdata .
       - run: flutter pub get
       - run: flutter config --enable-windows-desktop
       - run: flutter build windows --release
