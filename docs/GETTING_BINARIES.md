@@ -7,18 +7,6 @@ Android SDK, or Windows build tools installed — so it cannot compile a real
 GitHub Actions run artifacts on your behalf either. Use one of the two options
 below to get the compiled binaries.
 
-## Why earlier runs failed
-
-The repository only contained the cross-platform Dart code (`lib/`, `test/`,
-`pubspec.yaml`). It was missing the native `android/` and `windows/` platform
-projects that Flutter needs in order to compile a real `.apk` or `.exe`
-(these are normally generated once by running `flutter create .`, which this
-sandbox cannot run). The workflow now runs
-`flutter create --platforms=android --org com.qrdata .` and
-`flutter create --platforms=windows --org com.qrdata .` as a first step in
-each build job, so the missing native folders are generated fresh, using the
-same Flutter version that will compile them, right before each build.
-
 ## Option A — Let GitHub Actions build it (recommended, zero local setup)
 
 1. Every push to `main` runs `.github/workflows/flutter-ci.yml` automatically.
@@ -54,11 +42,10 @@ Requirements: Flutter SDK, an Android SDK with an accepted license
 
 ## Note on signing and package name
 
-- Both builds currently use Flutter's default debug signing config, which is
-  fine for installing/testing on your own devices but is not suitable for
-  Play Store submission or wide distribution. Ask the assistant to wire up a
-  real Android keystore (`key.properties` + `signingConfigs`) when you are
-  ready to distribute more broadly — you will need to generate and privately
-  keep that keystore yourself since it must never be committed to the repo.
+- By default the APK is signed with Flutter's debug key, which is fine for
+  installing/testing on your own devices but not for Play Store submission or
+  wide distribution. See `docs/RELEASE_SIGNING.md` for how to add your own
+  keystore as CI secrets so builds are signed for real — this repo cannot
+  generate or hold that keystore for you.
 - The generated Android `applicationId` will be `com.qrdata.qrdata`. Rename
   it before a real store listing if you want a different package id.
