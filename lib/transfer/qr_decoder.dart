@@ -75,6 +75,11 @@ class QRFileDecoder {
 
     if (raw.startsWith('QRD1F|')) {
       _acceptParityFrame(raw);
+      // A parity frame can be the piece that completes a recovery group, so
+      // always re-attempt recovery here too (not just after data/manifest
+      // frames), otherwise a missing chunk whose parity arrives last would
+      // never get healed until the next full loop cycle.
+      attemptFecRecovery();
       return;
     }
 
@@ -127,7 +132,17 @@ class QRFileDecoder {
     final chunk = base64Url.decode(parts[10]);
     if (crc32Hex(chunk) != chunkCrc) return;
 
-    if (transferId == null || transferId != incomingTransferId) {
+    // A parity (FEC) frame belonging to this transfer may have arrived
+    // before any data frame and already claimed `transferId`, without ever
+    // populating `total`/`chunkSize`/etc. Re-initialize metadata whenever
+    // either the transfer actually changed, or metadata was never set yet,
+    // so we never fall through to `total!` below while `total` is null.
+    final isNewTransfer = transferId != null && transferId != incomingTransferId;
+    if (isNewTransfer) {
+      chunks.clear();
+      parityChunks.clear();
+    }
+    if (isNewTransfer || total == null) {
       transferId = incomingTransferId;
       total = incomingTotal;
       chunkSize = incomingChunkSize;
@@ -136,8 +151,6 @@ class QRFileDecoder {
       mimeType = utf8.decode(base64Url.decode(parts[6]));
       fileSize ??= incomingPayloadSize;
       fileSha256 = incomingSha;
-      chunks.clear();
-      parityChunks.clear();
     }
 
     if (seq < 0 || seq >= total!) return;
