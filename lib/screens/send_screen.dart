@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:archive/archive.dart';
 import 'package:desktop_drop/desktop_drop.dart';
@@ -49,6 +50,13 @@ class _SendScreenState extends State<SendScreen> {
   bool encoding = false;
   double brightness = 1.0;
   bool roomIsDark = true;
+
+  /// True when it is safe to silently regenerate QR frames in the
+  /// background (e.g. after changing profile/compression). When encryption
+  /// is enabled but no passphrase has been entered yet, auto re-encoding
+  /// would throw, so the user must press "Apply" explicitly instead.
+  bool get _canAutoReencode =>
+      fileName != null && selectedBytes != null && (!encrypt || passphraseController.text.isNotEmpty);
 
   @override
   void dispose() {
@@ -106,37 +114,46 @@ class _SendScreenState extends State<SendScreen> {
 
   Future<void> _encodeAndShow({required String name, required List<int> bytes, String? forceMimeType}) async {
     setState(() => encoding = true);
-    final mimeType = forceMimeType ?? lookupMimeType(name, headerBytes: bytes) ?? 'application/octet-stream';
-    final encoder = QRFileEncoder(
-      chunkSize: profile.chunkSize,
-      profile: profile,
-      encrypted: encrypt,
-      compressed: compress && _shouldCompress(mimeType),
-    );
-    final transfer = await encoder.encodeFile(
-      fileName: name,
-      mimeType: mimeType,
-      bytes: bytes,
-      passphrase: encrypt ? passphraseController.text : null,
-    );
-
-    if (!mounted) return;
-    setState(() {
-      fileName = name;
-      fileSizeBytes = bytes.length;
-      selectedBytes = bytes;
-      allFrames = transfer.frames;
-      frames = transfer.frames;
-      resendNoticeText = null;
-      frameIndex = 0;
-      encoding = false;
-      estimate = TransferEstimator.estimate(
-        fileSizeBytes: bytes.length,
-        frameCount: transfer.frames.length,
-        fps: fps,
-        loopRedundancy: profile.loopRedundancy,
+    try {
+      final mimeType = forceMimeType ?? lookupMimeType(name, headerBytes: bytes) ?? 'application/octet-stream';
+      final encoder = QRFileEncoder(
+        chunkSize: profile.chunkSize,
+        profile: profile,
+        encrypted: encrypt,
+        compressed: compress && _shouldCompress(mimeType),
       );
-    });
+      final transfer = await encoder.encodeFile(
+        fileName: name,
+        mimeType: mimeType,
+        bytes: bytes,
+        passphrase: encrypt ? passphraseController.text : null,
+      );
+
+      if (!mounted) return;
+      setState(() {
+        fileName = name;
+        fileSizeBytes = bytes.length;
+        selectedBytes = bytes;
+        allFrames = transfer.frames;
+        frames = transfer.frames;
+        resendNoticeText = null;
+        frameIndex = 0;
+        estimate = TransferEstimator.estimate(
+          fileSizeBytes: bytes.length,
+          frameCount: transfer.frames.length,
+          fps: fps,
+          loopRedundancy: profile.loopRedundancy,
+        );
+      });
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not prepare this transfer: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => encoding = false);
+    }
   }
 
   void applyRetransmissionCode() {
@@ -197,6 +214,7 @@ class _SendScreenState extends State<SendScreen> {
     final currentFrame = frames.isEmpty ? null : frames[frameIndex];
     final isWindows = !kIsWeb && Platform.isWindows;
     final needsPassphrase = encrypt && passphraseController.text.isEmpty && fileName != null && allFrames.isEmpty;
+    final qrSize = min(420.0, MediaQuery.sizeOf(context).width * 0.8).clamp(200.0, 420.0);
 
     final content = ListView(
       padding: const EdgeInsets.all(16),
@@ -234,7 +252,7 @@ class _SendScreenState extends State<SendScreen> {
               profile = value;
               fps = value.recommendedFps;
             });
-            if (fileName != null && selectedBytes != null) await _encodeAndShow(name: fileName!, bytes: selectedBytes!);
+            if (_canAutoReencode) await _encodeAndShow(name: fileName!, bytes: selectedBytes!);
           },
         ),
         const SizedBox(height: 8),
@@ -243,7 +261,7 @@ class _SendScreenState extends State<SendScreen> {
           value: compress,
           onChanged: (v) async {
             setState(() => compress = v);
-            if (fileName != null && selectedBytes != null) await _encodeAndShow(name: fileName!, bytes: selectedBytes!);
+            if (_canAutoReencode) await _encodeAndShow(name: fileName!, bytes: selectedBytes!);
           },
         ),
         SwitchListTile(
@@ -269,7 +287,7 @@ class _SendScreenState extends State<SendScreen> {
                 ),
                 const SizedBox(width: 8),
                 FilledButton(
-                  onPressed: (fileName == null || selectedBytes == null)
+                  onPressed: (fileName == null || selectedBytes == null || passphraseController.text.isEmpty)
                       ? null
                       : () => _encodeAndShow(name: fileName!, bytes: selectedBytes!),
                   child: const Text('Apply'),
@@ -361,7 +379,7 @@ class _SendScreenState extends State<SendScreen> {
                     decoration: roomIsDark
                         ? null
                         : BoxDecoration(border: Border.all(color: Colors.black, width: 3)),
-                    child: QrImageView(data: currentFrame, version: QrVersions.auto, size: 340, backgroundColor: Colors.white),
+                    child: QrImageView(data: currentFrame, version: QrVersions.auto, size: qrSize, backgroundColor: Colors.white),
                   ),
           ),
           const SizedBox(height: 8),
