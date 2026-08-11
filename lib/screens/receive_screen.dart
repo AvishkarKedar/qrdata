@@ -2,14 +2,20 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:vibration/vibration.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../transfer/encryption.dart';
 import '../transfer/qr_decoder.dart';
 import '../transfer/receive_session_store.dart';
+import '../transfer/transfer_history_store.dart';
+import '../diagnostics/app_logger.dart';
 import '../widgets/artifact_preview.dart';
 
 class ReceiveScreen extends StatefulWidget {
@@ -22,22 +28,50 @@ class ReceiveScreen extends StatefulWidget {
 class _ReceiveScreenState extends State<ReceiveScreen> {
   final decoder = QRFileDecoder();
   final store = ReceiveSessionStore();
+  final historyStore = TransferHistoryStore();
+  final Set<String> _duplicateCheckedTransferIds = {};
+
   DecodedFile? decodedFile;
   String status = 'Point camera at sender QR screen';
   DateTime? startedAt;
   int decodedFrames = 0;
   bool finishing = false;
 
+  // Mobile runtime permission state.
+  bool _needsMobileCameraPermission = false;
+  bool _cameraPermanentlyDenied = false;
+  bool _permissionChecked = false;
+
   @override
   void initState() {
     super.initState();
     WakelockPlus.enable();
+    _ensureCameraPermission();
   }
 
   @override
   void dispose() {
     WakelockPlus.disable();
     super.dispose();
+  }
+
+  bool get _isMobilePlatform => !kIsWeb && (Platform.isAndroid || Platform.isIOS);
+
+  Future<void> _ensureCameraPermission() async {
+    if (!_isMobilePlatform) {
+      setState(() => _permissionChecked = true);
+      return;
+    }
+    var status = await Permission.camera.status;
+    if (status.isDenied) {
+      status = await Permission.camera.request();
+    }
+    if (!mounted) return;
+    setState(() {
+      _permissionChecked = true;
+      _needsMobileCameraPermission = !status.isGranted;
+      _cameraPermanentlyDenied = status.isPermanentlyDenied;
+    });
   }
 
   Future<void> onCode(String raw) async {
@@ -48,7 +82,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     decoder.acceptFrame(raw);
 
     final manifest = decoder.manifest;
-    if (manifest != null) await store.saveManifest(manifest);
+    if (manifest != null) {
+      await store.saveManifest(manifest);
+      _checkDuplicate(manifest.transferId, manifest.sha256, manifest.fileName);
+    }
     if (decoder.transferId != null && decoder.chunks.length > beforeChunks) {
       final newestSeq = decoder.chunks.keys.reduce((a, b) => a > b ? a : b);
       await store.saveChunk(transferId: decoder.transferId!, seq: newestSeq, bytes: decoder.chunks[newestSeq]!);
@@ -60,6 +97,33 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     if (decoder.isComplete) {
       await _finish();
     }
+  }
+
+  void _checkDuplicate(String transferId, String sha256, String fileName) {
+    if (_duplicateCheckedTransferIds.contains(transferId)) return;
+    _duplicateCheckedTransferIds.add(transferId);
+    historyStore.findBySha256(sha256).then((existing) {
+      if (existing == null || !mounted) return;
+      showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Already received this file'),
+          content: Text(
+            'A file with identical contents ("${existing.fileName}") was already received on ${existing.receivedAt.toLocal()}. Continue scanning anyway?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+              },
+              child: const Text('Discard, go back'),
+            ),
+            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Continue anyway')),
+          ],
+        ),
+      );
+    });
   }
 
   Future<void> _finish() async {
@@ -86,6 +150,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         final out = File('${dir.path}/${result.fileName}');
         await out.writeAsBytes(result.bytes, flush: true);
         if (decoder.transferId != null) await store.delete(decoder.transferId!);
+        if (decoder.fileSha256 != null) {
+          await historyStore.record(sha256: decoder.fileSha256!, fileName: result.fileName);
+        }
+        await AppLogger.log('Received and saved ${result.fileName} (${result.bytes.length} bytes)');
+        await _vibrateSuccess();
         if (mounted) {
           setState(() {
             decodedFile = result;
@@ -93,15 +162,31 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
           });
         }
       } else if (mounted) {
+        if (decoder.fileSha256 != null) {
+          await historyStore.record(sha256: decoder.fileSha256!, fileName: result.fileName);
+        }
+        await _vibrateSuccess();
         setState(() {
           decodedFile = result;
           status = 'Verified: ${result.fileName}';
         });
       }
     } on QrEncryptionRequiredException catch (e) {
+      await AppLogger.log('Decryption failed: ${e.message}', level: 'ERROR');
       if (mounted) setState(() => status = 'Decryption failed: ${e.message}');
     } finally {
       finishing = false;
+    }
+  }
+
+  Future<void> _vibrateSuccess() async {
+    try {
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        final hasVibrator = await Vibration.hasVibrator() ?? false;
+        if (hasVibrator) await Vibration.vibrate(duration: 200);
+      }
+    } catch (_) {
+      // Vibration is a nice-to-have; never let it interrupt a successful transfer.
     }
   }
 
@@ -133,34 +218,72 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return decodedFrames / elapsed;
   }
 
+  Widget _buildScanner() {
+    final isWindows = !kIsWeb && Platform.isWindows;
+
+    if (isWindows) {
+      // Best-effort native desktop scanner using flutter_zxing's built-in
+      // camera reader widget (bundles its own camera capture on Windows).
+      // This has not been compiled/verified in this environment (no Windows
+      // build toolchain available here) -- if CI reports an API mismatch on
+      // ReaderWidget/Code, report the exact error and it will be corrected.
+      return ReaderWidget(
+        onScan: (Code result) {
+          final text = result.text;
+          if (result.isValid && text != null && text.isNotEmpty) {
+            onCode(text);
+          }
+        },
+        onScanFailure: (String? error) {},
+        showFlashlight: false,
+        showGallery: false,
+        showToggleCamera: false,
+        scanDelay: const Duration(milliseconds: 120),
+        isMultiScan: false,
+      );
+    }
+
+    if (_isMobilePlatform && !_permissionChecked) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (_isMobilePlatform && _needsMobileCameraPermission) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text('Camera permission is required to scan QR frames.', textAlign: TextAlign.center),
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: _cameraPermanentlyDenied ? openAppSettings : _ensureCameraPermission,
+                child: Text(_cameraPermanentlyDenied ? 'Open app settings' : 'Grant camera permission'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return MobileScanner(
+      onDetect: (capture) {
+        for (final barcode in capture.barcodes) {
+          final raw = barcode.rawValue;
+          if (raw != null) onCode(raw);
+        }
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final isWindows = !kIsWeb && Platform.isWindows;
     final missingReport = decoder.missingChunkReport;
     return Scaffold(
       appBar: AppBar(title: const Text('Receive file')),
       body: Column(
         children: [
-          Expanded(
-            child: isWindows
-                ? const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(24),
-                      child: Text(
-                        'Windows camera scanner bridge placeholder. Next phase: native OpenCV/ZBar decoder with focus/exposure controls.',
-                        textAlign: TextAlign.center,
-                      ),
-                    ),
-                  )
-                : MobileScanner(
-                    onDetect: (capture) {
-                      for (final barcode in capture.barcodes) {
-                        final raw = barcode.rawValue;
-                        if (raw != null) onCode(raw);
-                      }
-                    },
-                  ),
-          ),
+          Expanded(child: _buildScanner()),
           Padding(
             padding: const EdgeInsets.all(16),
             child: Column(
@@ -170,11 +293,24 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 const SizedBox(height: 8),
                 LinearProgressIndicator(value: decoder.progress),
                 const SizedBox(height: 8),
-                Text('${(decoder.progress * 100).toStringAsFixed(1)}% complete • Actual decoded FPS: ${actualFps.toStringAsFixed(1)}'),
+                Text('${(decoder.progress * 100).toStringAsFixed(1)}% complete \u2022 Actual decoded FPS: ${actualFps.toStringAsFixed(1)}'),
                 if (missingReport != null && decoder.progress > 0 && decoder.progress < 1) ...[
                   const SizedBox(height: 12),
-                  const Text('Missing-chunk retransmission QR (show this to the sender\'s camera if you have one, or use a second device)'),
+                  const Text('Missing-chunk retransmission code (show this QR to the sender, or copy and paste it into the sender app)'),
                   Center(child: QrImageView(data: missingReport.toFrame(), size: 160)),
+                  const SizedBox(height: 8),
+                  Center(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.copy),
+                      label: const Text('Copy retransmission code'),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: missingReport.toFrame()));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Retransmission code copied. Paste it into the sender app.')),
+                        );
+                      },
+                    ),
+                  ),
                 ],
                 if (decodedFile != null) ...[
                   const SizedBox(height: 12),
