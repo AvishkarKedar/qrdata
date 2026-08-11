@@ -3,7 +3,6 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -222,24 +221,20 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final isWindows = !kIsWeb && Platform.isWindows;
 
     if (isWindows) {
-      // Best-effort native desktop scanner using flutter_zxing's built-in
-      // camera reader widget (bundles its own camera capture on Windows).
-      // This has not been compiled/verified in this environment (no Windows
-      // build toolchain available here) -- if CI reports an API mismatch on
-      // ReaderWidget/Code, report the exact error and it will be corrected.
-      return ReaderWidget(
-        onScan: (Code result) {
-          final text = result.text;
-          if (result.isValid && text != null && text.isNotEmpty) {
-            onCode(text);
-          }
-        },
-        onScanFailure: (String? error) {},
-        showFlashlight: false,
-        showGallery: false,
-        showToggleCamera: false,
-        scanDelay: const Duration(milliseconds: 120),
-        isMultiScan: false,
+      // Reverted: an earlier attempt wired in the flutter_zxing native plugin
+      // here, but it requires a CMake/NDK native build on both Android and
+      // Windows that could not be verified in this sandbox and broke CI.
+      // Reverted to this placeholder until a verified-working native Windows
+      // camera+decode path is confirmed green in CI.
+      return const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'Windows camera scanner is not wired up yet. A prior attempt using a native barcode plugin broke the build and was reverted; '
+            'a verified replacement is still pending. In the meantime, use an Android device to receive files.',
+            textAlign: TextAlign.center,
+          ),
+        ),
       );
     }
 
