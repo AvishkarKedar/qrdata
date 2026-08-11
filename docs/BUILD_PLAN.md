@@ -3,7 +3,7 @@
 We will build and verify one layer at a time.
 
 ## Phase 1 — Core protocol
-Status: started
+Status: implemented with tests
 
 Verification:
 - CRC32 known-value test.
@@ -11,6 +11,8 @@ Verification:
 - Encode/decode reconstruction test.
 - Out-of-order frame test.
 - Missing-chunk report test.
+- Retransmission frame filtering test.
+- Session restore test.
 
 ## Phase 2 — Sender UX
 Status: scaffolded
@@ -22,20 +24,25 @@ Verification:
 - Estimated time changes with profile and FPS.
 
 ## Phase 3 — Receiver UX
-Status: scaffolded
+Status: improved
 
 Verification:
 - Android camera detects QR frames.
 - Progress increases only for valid chunks.
 - Duplicate frames do not corrupt output.
 - Final SHA-256 must match before saving.
+- Partial chunks are saved for resume.
 
 ## Phase 4 — Reliability
-Status: next
+Status: started
 
-Build:
+Built:
 - Persistent partial chunk storage.
-- Real retransmission flow.
+- Retransmission request QR.
+- Sender-side missing-frame filter.
+
+Next:
+- Wire receiver retransmission QR into sender scan/manual import.
 - Real FEC/parity recovery.
 
 ## Phase 5 — Security

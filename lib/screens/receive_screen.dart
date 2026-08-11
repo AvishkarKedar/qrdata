@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../transfer/qr_decoder.dart';
+import '../transfer/receive_session_store.dart';
 import '../widgets/artifact_preview.dart';
 
 class ReceiveScreen extends StatefulWidget {
@@ -18,6 +19,7 @@ class ReceiveScreen extends StatefulWidget {
 
 class _ReceiveScreenState extends State<ReceiveScreen> {
   final decoder = QRFileDecoder();
+  final store = ReceiveSessionStore();
   DecodedFile? decodedFile;
   String status = 'Point camera at sender QR screen';
   DateTime? startedAt;
@@ -26,7 +28,16 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   Future<void> onCode(String raw) async {
     startedAt ??= DateTime.now();
     decodedFrames++;
+    final beforeChunks = decoder.chunks.length;
     final result = decoder.acceptFrame(raw);
+
+    final manifest = decoder.manifest;
+    if (manifest != null) await store.saveManifest(manifest);
+    if (decoder.transferId != null && decoder.chunks.length > beforeChunks) {
+      final newestSeq = decoder.chunks.keys.reduce((a, b) => a > b ? a : b);
+      await store.saveChunk(transferId: decoder.transferId!, seq: newestSeq, bytes: decoder.chunks[newestSeq]!);
+    }
+
     setState(() {
       status = decoder.statusText;
       decodedFile = result;
@@ -36,6 +47,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       final dir = await getApplicationDocumentsDirectory();
       final out = File('${dir.path}/${result.fileName}');
       await out.writeAsBytes(result.bytes, flush: true);
+      await store.delete(decoder.transferId!);
       setState(() => status = 'Verified and saved: ${out.path}');
     }
   }
@@ -89,7 +101,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
                 if (missingReport != null && decoder.progress > 0 && decoder.progress < 1) ...[
                   const SizedBox(height: 12),
                   const Text('Missing-chunk retransmission QR'),
-                  Center(child: QrImageView(data: missingReport.toQrPayload(), size: 160)),
+                  Center(child: QrImageView(data: missingReport.toFrame(), size: 160)),
                 ],
                 if (decodedFile != null) ...[
                   const SizedBox(height: 12),

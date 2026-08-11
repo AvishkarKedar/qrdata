@@ -4,6 +4,7 @@ import 'package:crypto/crypto.dart';
 
 import 'crc32.dart';
 import 'manifest.dart';
+import 'retransmission.dart';
 
 class DecodedFile {
   final String fileName;
@@ -11,15 +12,6 @@ class DecodedFile {
   final List<int> bytes;
 
   DecodedFile({required this.fileName, required this.mimeType, required this.bytes});
-}
-
-class MissingChunkReport {
-  final String transferId;
-  final List<int> missing;
-
-  const MissingChunkReport({required this.transferId, required this.missing});
-
-  String toQrPayload() => 'QRD1R|$transferId|${missing.join(',')}';
 }
 
 class QRFileDecoder {
@@ -34,9 +26,7 @@ class QRFileDecoder {
   final Set<String> seenFrameHashes = {};
 
   double get progress => total == null || total == 0 ? 0 : chunks.length / total!;
-  String get statusText => total == null
-      ? 'Waiting for first frame'
-      : 'Received ${chunks.length}/$total chunks';
+  String get statusText => total == null ? 'Waiting for first frame' : 'Received ${chunks.length}/$total chunks';
 
   List<int> get missingChunks {
     final t = total;
@@ -44,10 +34,23 @@ class QRFileDecoder {
     return [for (var i = 0; i < t; i++) if (!chunks.containsKey(i)) i];
   }
 
-  MissingChunkReport? get missingChunkReport {
+  RetransmissionRequest? get missingChunkReport {
     final id = transferId;
     if (id == null) return null;
-    return MissingChunkReport(transferId: id, missing: missingChunks);
+    return RetransmissionRequest(transferId: id, missing: missingChunks.toSet());
+  }
+
+  void restore({required TransferManifest savedManifest, required Map<int, List<int>> savedChunks}) {
+    manifest = savedManifest;
+    transferId = savedManifest.transferId;
+    total = savedManifest.totalChunks;
+    fileName = savedManifest.fileName;
+    mimeType = savedManifest.mimeType;
+    fileSize = savedManifest.fileSize;
+    fileSha256 = savedManifest.sha256;
+    chunks
+      ..clear()
+      ..addAll(savedChunks);
   }
 
   DecodedFile? acceptFrame(String raw) {
@@ -95,16 +98,17 @@ class QRFileDecoder {
 
     if (seq < 0 || seq >= total!) return null;
     chunks.putIfAbsent(seq, () => chunk);
+    return tryBuildFile();
+  }
 
-    if (chunks.length == total) {
-      final output = <int>[];
-      for (var i = 0; i < total!; i++) {
-        output.addAll(chunks[i]!);
-      }
-      if (output.length != fileSize) return null;
-      if (sha256.convert(output).toString() != fileSha256) return null;
-      return DecodedFile(fileName: fileName!, mimeType: mimeType!, bytes: output);
+  DecodedFile? tryBuildFile() {
+    if (total == null || chunks.length != total) return null;
+    final output = <int>[];
+    for (var i = 0; i < total!; i++) {
+      output.addAll(chunks[i]!);
     }
-    return null;
+    if (output.length != fileSize) return null;
+    if (sha256.convert(output).toString() != fileSha256) return null;
+    return DecodedFile(fileName: fileName!, mimeType: mimeType!, bytes: output);
   }
 }
