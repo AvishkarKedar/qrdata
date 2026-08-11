@@ -4,6 +4,9 @@ class TransferEstimate {
 
   TransferEstimate({required this.duration, required this.bytesPerSecond});
 
+  /// Total estimated transfer time in seconds (fractional).
+  double get totalSeconds => duration.inMilliseconds / 1000.0;
+
   String get humanTime {
     final seconds = duration.inSeconds;
     if (seconds < 60) return '$seconds sec';

@@ -225,7 +225,7 @@ class _SendScreenState extends State<SendScreen> {
         ]),
         const SizedBox(height: 16),
         DropdownButtonFormField<TransferProfile>(
-          value: profile,
+          initialValue: profile,
           decoration: const InputDecoration(labelText: 'Transfer profile'),
           items: TransferProfile.values.map((p) => DropdownMenuItem(value: p, child: Text(p.label))).toList(),
           onChanged: (value) async {
@@ -332,7 +332,7 @@ class _SendScreenState extends State<SendScreen> {
           ArtifactPreview(fileName: fileName!, bytes: selectedBytes),
           const SizedBox(height: 16),
           DropdownButtonFormField<int>(
-            value: fps,
+            initialValue: fps,
             decoration: const InputDecoration(labelText: 'Playback FPS'),
             items: fpsOptions.map((value) => DropdownMenuItem(value: value, child: Text('$value FPS'))).toList(),
             onChanged: (value) {
@@ -356,7 +356,7 @@ class _SendScreenState extends State<SendScreen> {
             child: currentFrame == null
                 ? const SizedBox.shrink()
                 : Container(
-                    color: Colors.white.withOpacity(brightness),
+                    color: Colors.white.withValues(alpha: brightness),
                     padding: EdgeInsets.all(roomIsDark ? 12 : 4),
                     decoration: roomIsDark
                         ? null

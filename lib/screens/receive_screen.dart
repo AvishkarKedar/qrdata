@@ -181,7 +181,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   Future<void> _vibrateSuccess() async {
     try {
       if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-        final hasVibrator = await Vibration.hasVibrator() ?? false;
+        final hasVibrator = await Vibration.hasVibrator();
         if (hasVibrator) await Vibration.vibrate(duration: 200);
       }
     } catch (_) {

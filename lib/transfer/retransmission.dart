@@ -18,14 +18,23 @@ class RetransmissionRequest {
 }
 
 class RetransmissionFilter {
+  final RetransmissionRequest request;
+
+  const RetransmissionFilter(this.request);
+
+  /// Instance check used by callers (and tests) that already built a filter
+  /// for a specific request and want to test individual frames.
+  bool shouldResend(String frame) {
+    if (!frame.startsWith('QRD1|')) return false;
+    final parts = frame.split('|');
+    if (parts.length != 11) return false;
+    if (parts[1] != request.transferId) return false;
+    final seq = int.tryParse(parts[2]);
+    return seq != null && request.missing.contains(seq);
+  }
+
   static List<String> onlyMissingFrames({required List<String> frames, required RetransmissionRequest request}) {
-    return frames.where((frame) {
-      if (!frame.startsWith('QRD1|')) return false;
-      final parts = frame.split('|');
-      if (parts.length != 11) return false;
-      if (parts[1] != request.transferId) return false;
-      final seq = int.tryParse(parts[2]);
-      return seq != null && request.missing.contains(seq);
-    }).toList();
+    final filter = RetransmissionFilter(request);
+    return frames.where(filter.shouldResend).toList();
   }
 }
