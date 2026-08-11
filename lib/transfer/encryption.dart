@@ -20,7 +20,7 @@ class QrEncryptionRequiredException implements Exception {
 /// AES-256-GCM encryption with a PBKDF2-derived key. This protects file
 /// contents from anyone else who points a camera at the sender's screen.
 /// The passphrase must be shared with the receiver out-of-band (in person,
-/// chat, etc.) — it is never transmitted in the QR frames.
+/// chat, etc.) - it is never transmitted in the QR frames.
 class QrEncryption {
   static final AesGcm _algorithm = AesGcm.with256bits();
 
@@ -37,3 +37,25 @@ class QrEncryption {
     final key = await _deriveKey(passphrase: passphrase, salt: salt);
     final secretBox = await _algorithm.encrypt(plainBytes, secretKey: key);
     return EncryptedPayload(
+      cipherText: secretBox.cipherText,
+      nonce: secretBox.nonce,
+      mac: secretBox.mac.bytes,
+    );
+  }
+
+  static Future<List<int>> decrypt({
+    required List<int> cipherText,
+    required List<int> nonce,
+    required List<int> mac,
+    required String passphrase,
+    required List<int> salt,
+  }) async {
+    final key = await _deriveKey(passphrase: passphrase, salt: salt);
+    final secretBox = SecretBox(cipherText, nonce: nonce, mac: Mac(mac));
+    try {
+      return await _algorithm.decrypt(secretBox, secretKey: key);
+    } catch (_) {
+      throw const QrEncryptionRequiredException('Wrong passphrase or corrupted data');
+    }
+  }
+}
