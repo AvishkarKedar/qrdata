@@ -34,6 +34,8 @@ jobs:
           channel: stable
       - name: Scaffold Android platform folder if missing
         run: flutter create --platforms=android --org com.qrdata .
+      - name: Ensure Android compileSdk/targetSdk satisfy plugin AAR requirements
+        run: python3 .github/scripts/patch_android_sdk_versions.py
       - run: flutter pub get
       - name: Configure release signing (only runs if keystore secrets are set)
         if: ${{ env.HAS_ANDROID_KEYSTORE == 'true' }}
@@ -70,7 +72,16 @@ jobs:
         run: flutter create --platforms=windows --org com.qrdata .
       - run: flutter pub get
       - run: flutter config --enable-windows-desktop
-      - run: flutter build windows --release
+      - name: Build Windows release
+        # permission_handler_windows (and possibly other plugins) still use
+        # the deprecated <experimental/coroutine> STL header. Newer MSVC
+        # toolsets turn that into a hard static_assert error instead of a
+        # warning. Defining this macro (via the CL env var, which cl.exe
+        # reads automatically and prepends to every invocation) silences it
+        # without needing to patch any plugin or generated CMake file.
+        env:
+          CL: /D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+        run: flutter build windows --release
       - uses: actions/upload-artifact@v4
         with:
           name: qrdata-windows-release
