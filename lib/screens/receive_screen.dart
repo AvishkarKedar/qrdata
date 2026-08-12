@@ -42,6 +42,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   bool _cameraPermanentlyDenied = false;
   bool _permissionChecked = false;
 
+  // Explicit controller (rather than letting MobileScanner create its own
+  // default one) so the errorBuilder's Retry button can call start() again
+  // after a failed camera start.
+  final MobileScannerController _scannerController = MobileScannerController();
+
   @override
   void initState() {
     super.initState();
@@ -52,6 +57,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   @override
   void dispose() {
     WakelockPlus.disable();
+    _scannerController.dispose();
     super.dispose();
   }
 
@@ -232,6 +238,25 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     return CalibrationEngine.recommend(successfulFramesPerSecond: actualFps.round(), lowLight: false);
   }
 
+  /// Plain-language guidance for a camera-start failure, keyed by the
+  /// MobileScannerErrorCode reported by the platform layer.
+  String _cameraErrorGuidance(MobileScannerException error) {
+    switch (error.errorCode) {
+      case MobileScannerErrorCode.permissionDenied:
+        return 'The system denied camera permission to this app. Open Settings '
+            '\u2192 Apps \u2192 qrdata \u2192 Permissions and allow Camera, then tap Retry.';
+      case MobileScannerErrorCode.unsupported:
+        return 'Android reported "No cameras available" when starting the camera. '
+            'The most common cause is that an older copy of this app (installed '
+            'before camera permission was added) is still on the device: fully '
+            'uninstall the app, then install the latest build, so Android grants '
+            'the new permission. If it still fails, close any other app that '
+            'might be using the camera, restart the phone, then tap Retry.';
+      default:
+        return error.errorDetails?.message ?? error.errorCode.message;
+    }
+  }
+
   Widget _buildScanner() {
     final isWindows = !kIsWeb && Platform.isWindows;
 
@@ -277,11 +302,42 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     }
 
     return MobileScanner(
+      controller: _scannerController,
       onDetect: (capture) {
         for (final barcode in capture.barcodes) {
           final raw = barcode.rawValue;
           if (raw != null) onCode(raw);
         }
+      },
+      // Without this, any camera-start failure (permission race, no camera
+      // reported by the OS, etc.) silently rendered as a plain black box with
+      // a small error icon and no explanation. Surface the real error code
+      // and give the user a way to retry.
+      errorBuilder: (context, error, child) {
+        return Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.error_outline, size: 40),
+                const SizedBox(height: 12),
+                Text(
+                  'Camera error: ${error.errorCode.name}',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Text(_cameraErrorGuidance(error), textAlign: TextAlign.center),
+                const SizedBox(height: 16),
+                FilledButton(
+                  onPressed: () => _scannerController.start(),
+                  child: const Text('Retry'),
+                ),
+              ],
+            ),
+          ),
+        );
       },
     );
   }
