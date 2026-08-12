@@ -239,10 +239,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   /// Plain-language guidance for a camera-start failure, keyed by the
-  /// MobileScannerErrorCode reported by the platform layer. Deliberately
-  /// does not rely on any MobileScannerErrorCode getter beyond the built-in
-  /// Dart enum `.name`, since the exact API surface (e.g. a `.message`
-  /// getter) has varied across mobile_scanner releases.
+  /// MobileScannerErrorCode reported by the platform layer.
   String _cameraErrorGuidance(MobileScannerException error) {
     switch (error.errorCode) {
       case MobileScannerErrorCode.permissionDenied:
@@ -255,8 +252,14 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             'uninstall the app, then install the latest build, so Android grants '
             'the new permission. If it still fails, close any other app that '
             'might be using the camera, restart the phone, then tap Retry.';
+      case MobileScannerErrorCode.genericError:
+        return 'The camera failed to start due to a transient error '
+            '(${error.errorDetails?.message ?? error.errorCode.message}). This can '
+            'happen briefly right after granting permission, or if another app is '
+            'still holding the camera. Tap Retry; if it keeps happening, fully '
+            'close any other camera app and restart the phone.';
       default:
-        return error.errorDetails?.message ?? 'Error code: ${error.errorCode.name}.';
+        return error.errorDetails?.message ?? error.errorCode.message;
     }
   }
 
@@ -313,10 +316,11 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         }
       },
       // Without this, any camera-start failure (permission race, no camera
-      // reported by the OS, etc.) silently rendered as a plain black box with
-      // a small error icon and no explanation. Surface the real error code
-      // and give the user a way to retry.
-      errorBuilder: (context, error, child) {
+      // reported by the OS, a transient CameraX/HAL error, etc.) silently
+      // rendered as a plain black box with a small error icon and no
+      // explanation. Surface the real error code and give the user a way to
+      // retry.
+      errorBuilder: (context, error) {
         return Center(
           child: Padding(
             padding: const EdgeInsets.all(24),
