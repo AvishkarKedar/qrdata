@@ -239,7 +239,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   /// Plain-language guidance for a camera-start failure, keyed by the
-  /// MobileScannerErrorCode reported by the platform layer.
+  /// MobileScannerErrorCode reported by the platform layer. Deliberately
+  /// does not rely on any MobileScannerErrorCode getter beyond the built-in
+  /// Dart enum `.name`, since the exact API surface (e.g. a `.message`
+  /// getter) has varied across mobile_scanner releases.
   String _cameraErrorGuidance(MobileScannerException error) {
     switch (error.errorCode) {
       case MobileScannerErrorCode.permissionDenied:
@@ -253,7 +256,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             'the new permission. If it still fails, close any other app that '
             'might be using the camera, restart the phone, then tap Retry.';
       default:
-        return error.errorDetails?.message ?? error.errorCode.message;
+        return error.errorDetails?.message ?? 'Error code: ${error.errorCode.name}.';
     }
   }
 
