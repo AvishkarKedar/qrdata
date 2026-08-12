@@ -16,7 +16,7 @@ dependencies:
   mime: ^1.0.5
   path_provider: ^2.1.4
   qr_flutter: ^4.1.0
-  mobile_scanner: ^7.4.1
+  mobile_scanner: ^7.4.0
   wakelock_plus: ^1.2.8
   url_launcher: ^6.3.0
   permission_handler: ^11.3.1
