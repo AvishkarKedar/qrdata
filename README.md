@@ -1,7 +1,13 @@
 # QRData
 
+[![Flutter CI](https://github.com/AvishkarKedar/qrdata/actions/workflows/flutter-ci.yml/badge.svg)](https://github.com/AvishkarKedar/qrdata/actions/workflows/flutter-ci.yml)
+
 Offline file transfer over camera using animated QR frames. Android and
 Windows, no internet/Bluetooth/cable/local network required.
+
+**Air-gap friendly by design:** the only channel between sender and receiver
+is the camera scanning the screen. Encrypted or not, no network stack is
+involved at any point.
 
 ## How it works
 A sender selects a file (or multiple files, zipped), the app splits it into
@@ -9,6 +15,19 @@ chunks, encodes chunks into QR frames (optionally compressed and AES-256-GCM
 encrypted), and plays them in a loop on screen. A receiver scans the frames
 with a camera, verifies each chunk (CRC32) and the whole file (SHA-256),
 reconstructs it, and previews common file types.
+
+## Highlights
+
+| Capability | Detail |
+|------------|--------|
+| Platforms | One Flutter codebase → Android + Windows |
+| Throughput profiles | Reliable / Balanced / Fast / Extreme |
+| Playback FPS | Selectable: 10 / 15 / 30 / 60 / 90 / 120 |
+| Encryption | AES-256-GCM with a shared passphrase (optional) |
+| Compression | Optional, before QR encoding |
+| Integrity | CRC32 per chunk, SHA-256 whole-file check |
+| Loss recovery | XOR parity (FEC) frames + targeted retransmission |
+| Environment presets | Brightness control + dark/light room modes |
 
 ## Implemented
 - Single Flutter codebase for Android and Windows.
@@ -30,11 +49,11 @@ reconstructs it, and previews common file types.
   icon), no third-party service or API key required.
 - Attribution footer on the home screen linking to the developer's GitHub
   profile.
-- CI (`\.github/workflows/flutter-ci.yml`): analyze + test, then build a real
+- CI (`.github/workflows/flutter-ci.yml`): analyze + test, then build a real
   Android APK and Windows executable as downloadable Actions artifacts. See
-  `docs/GETTING_BINARIES.md`.
+  [`docs/GETTING_BINARIES.md`](docs/GETTING_BINARIES.md).
 - Optional real release signing for the Android APK once you add your own
-  keystore as CI secrets -- see `docs/RELEASE_SIGNING.md`.
+  keystore as CI secrets — see [`docs/RELEASE_SIGNING.md`](docs/RELEASE_SIGNING.md).
 
 ## Not yet implemented
 - Adaptive FPS/QR-density negotiation based on live scan quality.
@@ -53,8 +72,9 @@ flutter run -d windows
 flutter build apk --release
 flutter build windows --release
 ```
-See `docs/GETTING_BINARIES.md` if you don't want to install the Flutter SDK
-locally -- GitHub Actions builds both binaries on every push.
+See [`docs/GETTING_BINARIES.md`](docs/GETTING_BINARIES.md) if you don't want
+to install the Flutter SDK locally — GitHub Actions builds both binaries on
+every push.
 
 ## Important engineering note
 QR camera transfer must be tuned on real devices. High FPS is not guaranteed
